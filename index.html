@@ -3,45 +3,61 @@
 <head>
     <script src="coi-serviceworker.js"></script>
     <meta charset="UTF-8">
-    <title>Splat Hunter - Photorealistic Game</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Splat Hunter Pro - Photorealistic Engine</title>
     <style>
-        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
-        #info-ui {
+        :root { --accent: #4ade80; }
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Roboto, sans-serif; color: white; }
+        
+        /* UI Design */
+        #ui-layer {
             position: absolute;
-            top: 20px;
-            left: 20px;
-            color: white;
-            background: rgba(0, 0, 0, 0.7);
+            top: 20px; left: 20px;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        .glass {
+            background: rgba(15, 15, 15, 0.7);
+            backdrop-filter: blur(12px);
             padding: 20px;
             border-radius: 12px;
-            pointer-events: none;
-            backdrop-filter: blur(5px);
-            border: 1px solid rgba(255,255,255,0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            pointer-events: auto;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
         }
-        h1 { margin: 0 0 10px 0; font-size: 1.5rem; letter-spacing: 1px; }
-        p { margin: 5px 0; font-size: 0.9rem; color: #ccc; }
-        #score { font-size: 1.2rem; color: #4ade80; font-weight: bold; }
+
+        #level-select { position: absolute; top: 20px; right: 20px; z-index: 100; }
+
+        select {
+            background: #111; color: white; padding: 10px;
+            border-radius: 6px; border: 1px solid #333; cursor: pointer;
+        }
+
+        h1 { margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 3px; color: var(--accent); }
+        .hint { font-size: 0.75rem; color: #888; margin-top: 5px; }
+        
+        #loading-screen {
+            position: fixed; inset: 0; background: #000;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 1000; transition: opacity 0.8s ease;
+        }
+
+        /* Mirino dinamico */
         #crosshair {
-            position: absolute;
-            top: 50%; left: 50%;
-            width: 20px; height: 20px;
-            background: transparent;
-            border: 2px solid rgba(255, 255, 255, 0.8);
+            position: absolute; top: 50%; left: 50%;
+            width: 14px; height: 14px;
+            border: 2px solid rgba(255,255,255,0.5);
             border-radius: 50%;
             transform: translate(-50%, -50%);
             pointer-events: none;
-            z-index: 10;
+            transition: all 0.2s;
         }
-        .target-marker {
-            position: absolute;
-            width: 40px; height: 40px;
-            border: 2px solid #ffeb3b;
-            border-radius: 50%;
-            animation: pulse 1s infinite;
-            display: none;
-        }
-        @keyframes pulse { 0% {transform: scale(0.8); opacity: 1;} 100% {transform: scale(1.5); opacity: 0;} }
+
+        .loading-bar { width: 200px; height: 2px; background: #222; margin-top: 20px; position: relative; }
+        .loading-fill { width: 0%; height: 100%; background: var(--accent); transition: width 0.3s; }
     </style>
+
     <script type="importmap">
     {
         "imports": {
@@ -53,115 +69,125 @@
 </head>
 <body>
 
-    <div id="info-ui">
-        <h1>🔍 Splat Hunter</h1>
-        <p>Trova il dettaglio nascosto nella scena!</p>
-        <p>Obiettivo: <span id="target-desc">La sedia rossa</span></p>
-        <p>Punteggio: <span id="score">0</span></p>
-        <p style="font-size: 0.7rem; margin-top: 10px;">WASD per muoversi • Mouse per guardare • Click per interagire</p>
+    <div id="loading-screen">
+        <h1>Sincronizzazione Realtà...</h1>
+        <div class="loading-bar"><div id="progress" class="loading-fill"></div></div>
     </div>
-    
+
+    <div id="ui-layer">
+        <div class="glass">
+            <h1>Splat Hunter v2</h1>
+            <div id="mission-text" style="margin: 10px 0; font-weight: bold;">Missione: Esplora l'ambiente</div>
+            <div class="hint">CLICCA PER ATTIVARE IL MOUSE<br>WASD per muoverti • ESC per uscire</div>
+            <div style="font-family: monospace; font-size: 10px; margin-top:10px;">FPS: <span id="fps">--</span></div>
+        </div>
+    </div>
+
+    <div id="level-select" class="glass">
+        <select id="scena-dropdown">
+            <option value="cucina">Cucina Reale (HD)</option>
+            <option value="giardino">Giardino Botanico</option>
+            <option value="bonsai">Studio del Bonsai</option>
+        </select>
+    </div>
+
     <div id="crosshair"></div>
 
     <script type="module">
         import * as THREE from 'three';
         import { Viewer } from '@mkkellogg/gaussian-splats-3d';
 
-        // 1. CONFIGURAZIONE SCENA
+        const scenes = {
+            cucina: 'https://huggingface.co/datasets/dylanebert/3dgs/resolve/main/kitchen/kitchen.splat',
+            giardino: 'https://huggingface.co/datasets/dylanebert/3dgs/resolve/main/garden/garden.splat',
+            bonsai: 'https://huggingface.co/datasets/dylanebert/3dgs/resolve/main/bonsai/bonsai.splat'
+        };
+
+        // Inizializzazione con setup per alte prestazioni
         const viewer = new Viewer({
             'cameraUp': [0, 1, 0],
             'initialCameraPosition': [0, 1.5, 4],
             'initialCameraLookAt': [0, 1, 0],
-            'halfPrecisionCovariancesOnGPU': true, // Ottimizzazione performance
+            'devicePixelRatio': window.devicePixelRatio,
+            'halfPrecisionCovariancesOnGPU': false,
+            'dynamicScene': true // Permette aggiornamenti fluidi della camera
         });
 
-        // *** IMPORTANTE: QUI VA IL LINK AL TUO FILE .SPLAT ***
-        // Per testare, puoi usare un URL demo pubblico se ne hai uno, 
-        // oppure un file locale (richiede un server locale).
-        // Esempio: 'assets/mia-stanza.splat'
-        const splatUrl = 'https://huggingface.co/datasets/dylanebert/3dgs/resolve/main/kitchen/kitchen-7k.splat'; 
+        async function loadScene(name) {
+            const loader = document.getElementById('loading-screen');
+            const progress = document.getElementById('progress');
+            loader.style.opacity = '1';
+            loader.style.display = 'flex';
+            progress.style.width = '30%';
 
-        viewer.addSplatScene(splatUrl, {
-            'splatAlphaRemovalThreshold': 5,
-            'showLoadingUI': true,
-            'position': [0, 0, 0],
-            'rotation': [0, 0, 0, 1],
-            'scale': [1, 1, 1]
-        })
-        .then(() => {
-            console.log("Scena caricata ad alta fedeltà!");
-            viewer.start();
-        });
+            if (viewer.splatMesh) {
+                viewer.dispose();
+            }
 
-        // 2. LOGICA DI GIOCO (RAYCASTING)
-        let score = 0;
-        const targetDesc = document.getElementById('target-desc');
-        const scoreDisplay = document.getElementById('score');
-        
-        // Definiamo delle "Zone" segrete (Coordinate X, Y, Z approssimative)
-        // In un gioco reale, queste coordinate le ottieni cliccando nella scena e loggando la posizione
-        const hiddenObjects = [
-            { name: "il rubinetto", position: new THREE.Vector3(-0.5, 1.2, -1.5), radius: 0.5, found: false },
-            { name: "il pavimento di legno", position: new THREE.Vector3(0, 0, 0), radius: 1.0, found: false }
-        ];
-        
-        let currentTargetIndex = 0;
-        updateUI();
-
-        function updateUI() {
-            if (currentTargetIndex < hiddenObjects.length) {
-                targetDesc.innerText = hiddenObjects[currentTargetIndex].name;
-            } else {
-                targetDesc.innerText = "Tutti gli oggetti trovati! Vittoria!";
-                targetDesc.style.color = "#4ade80";
+            try {
+                await viewer.addSplatScene(scenes[name], {
+                    'showLoadingUI': false,
+                    'progressiveLoad': true,
+                });
+                
+                progress.style.width = '100%';
+                viewer.start();
+                
+                setTimeout(() => {
+                    loader.style.opacity = '0';
+                    setTimeout(() => loader.style.display = 'none', 800);
+                }, 400);
+            } catch (err) {
+                console.error(err);
+                alert("Errore nel caricamento.");
             }
         }
 
-        // Gestione del Click
-        document.addEventListener('click', () => {
-            if (currentTargetIndex >= hiddenObjects.length) return;
+        // --- SISTEMA DI MOVIMENTO ---
+        const keys = { w: false, a: false, s: false, d: false };
+        document.addEventListener('keydown', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; });
+        document.addEventListener('keyup', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; });
 
-            // Otteniamo la posizione della camera
-            const camera = viewer.camera;
-            
-            // Creiamo un Raycaster dal centro dello schermo
-            const raycaster = new THREE.Raycaster();
-            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-
-            // Nota: Il raycasting preciso sui Splat è complesso (nuvola di punti).
-            // Per questo mini-gioco, usiamo una logica semplificata basata sulla distanza
-            // tra la posizione della camera + direzione sguardo e l'oggetto.
-            
-            // Calcoliamo dove il giocatore sta guardando (proiettiamo un punto in avanti)
-            const lookVector = new THREE.Vector3();
-            camera.getWorldDirection(lookVector);
-            
-            // Punto stimato di "tocco" a distanza variabile (es. 2 metri avanti)
-            const targetPos = hiddenObjects[currentTargetIndex].position;
-            
-            // Calcolo distanza angolare (se sto guardando verso l'oggetto)
-            const vectorToTarget = targetPos.clone().sub(camera.position).normalize();
-            const angle = lookVector.angleTo(vectorToTarget); // In radianti
-
-            // Se l'angolo è piccolo (sto guardando l'oggetto) e sono abbastanza vicino
-            const distanceToObj = camera.position.distanceTo(targetPos);
-            
-            // Soglia di precisione (0.2 radianti è circa 11 gradi)
-            if (angle < 0.2 && distanceToObj < 5) {
-                // Successo!
-                score += 100;
-                scoreDisplay.innerText = score;
-                hiddenObjects[currentTargetIndex].found = true;
-                currentTargetIndex++;
-                
-                // Feedback visivo (opzionale)
-                alert("Trovato: " + hiddenObjects[currentTargetIndex-1].name + "!");
-                
-                updateUI();
-            } else {
-                console.log("Mancato! Angolo:", angle, "Distanza:", distanceToObj);
-            }
+        // Attivazione Pointer Lock
+        document.body.addEventListener('click', () => {
+            if(document.pointerLockElement !== document.body) document.body.requestPointerLock();
         });
+
+        // Aggiornamento posizione camera
+        function updateMovement() {
+            if (!viewer.camera) return;
+
+            const speed = 0.05;
+            const direction = new THREE.Vector3();
+            const front = new THREE.Vector3();
+            const right = new THREE.Vector3();
+
+            viewer.camera.getWorldDirection(front);
+            right.crossVectors(front, viewer.camera.up).normalize();
+
+            if (keys.w) viewer.camera.position.addScaledVector(front, speed);
+            if (keys.s) viewer.camera.position.addScaledVector(front, -speed);
+            if (keys.a) viewer.camera.position.addScaledVector(right, -speed);
+            if (keys.d) viewer.camera.position.addScaledVector(right, speed);
+        }
+
+        // --- LOOP DI GIOCO ---
+        let lastTime = 0;
+        function gameLoop(time) {
+            updateMovement();
+            
+            // FPS Counter
+            const dt = time - lastTime;
+            lastTime = time;
+            if(dt > 0 && Math.random() > 0.9) document.getElementById('fps').innerText = Math.round(1000/dt);
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        document.getElementById('scena-dropdown').addEventListener('change', (e) => loadScene(e.target.value));
+        
+        loadScene('cucina');
+        requestAnimationFrame(gameLoop);
 
     </script>
 </body>
