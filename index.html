@@ -3,13 +3,15 @@
 <head>
     <script src="coi-serviceworker.js"></script>
     <meta charset="UTF-8">
-    <title>Splat Hunter Pro - Fix Edition</title>
+    <title>Splat Explorer Pro - Fix Finale</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; color: white; }
         #ui { position: absolute; top: 20px; left: 20px; z-index: 10; pointer-events: none; }
-        .panel { background: rgba(0,0,0,0.7); padding: 15px; border-radius: 10px; pointer-events: auto; border: 1px solid #4ade80; }
-        #loading { position: fixed; inset: 0; background: #000; display: flex; justify-content: center; align-items: center; z-index: 1000; }
-        #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; border: 1px solid white; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+        .panel { background: rgba(0,0,0,0.8); padding: 20px; border-radius: 12px; pointer-events: auto; border: 1px solid #4ade80; max-width: 300px; }
+        #loading-screen { position: fixed; inset: 0; background: #000; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 1000; transition: opacity 0.5s; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.5); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+        h1 { margin: 0; color: #4ade80; font-size: 1.2rem; }
+        .error-msg { color: #ff4444; font-size: 0.8rem; margin-top: 10px; display: none; }
     </style>
     <script type="importmap">
     {
@@ -22,14 +24,24 @@
 </head>
 <body>
 
-    <div id="loading"><h1>Caricamento Realtà...</h1></div>
+    <div id="loading-screen">
+        <h1>Caricamento Scenario...</h1>
+        <p id="load-status">Connessione ai server HD...</p>
+    </div>
+
     <div id="crosshair"></div>
 
     <div id="ui">
         <div class="panel">
-            <h2 style="margin:0; color:#4ade80;">SPLAT HUNTER</h2>
-            <p id="status">Stato: Inizializzazione...</p>
-            <p style="font-size: 0.8rem;">1. Clicca per muovere la visuale<br>2. WASD per camminare</p>
+            <h1>Splat Hunter</h1>
+            <p id="status">Stato: In attesa...</p>
+            <div id="error-log" class="error-msg"></div>
+            <hr style="border: 0; border-top: 1px solid #333;">
+            <p style="font-size: 0.75rem; line-height: 1.4;">
+                <b>CLICK</b> per catturare il mouse<br>
+                <b>WASD</b> per camminare<br>
+                <b>MOUSE</b> per guardarti intorno
+            </p>
         </div>
     </div>
 
@@ -37,48 +49,65 @@
         import * as THREE from 'three';
         import { Viewer } from '@mkkellogg/gaussian-splats-3d';
 
-        // Controllo Sicurezza
-        if (!window.crossOriginIsolated) {
-            document.getElementById('status').innerHTML = "⚠️ ERRORE: Server non configurato correttamente.<br>Controlla coi-serviceworker.js";
-            document.getElementById('status').style.color = "red";
-        }
+        // URL TESTATI E STABILI (Splat di prova ufficiali)
+        const SPLAT_URL = 'https://huggingface.co/datasets/mkkellogg/GaussianLevelSplats/resolve/main/garden.splat';
 
         const viewer = new Viewer({
             'cameraUp': [0, 1, 0],
-            'initialCameraPosition': [0, 1.5, 3],
+            'initialCameraPosition': [0, 1, 4],
             'initialCameraLookAt': [0, 1, 0],
             'devicePixelRatio': window.devicePixelRatio
         });
 
-        // Carichiamo una scena testata e stabile
-        const sceneUrl = 'https://huggingface.co/datasets/dylanebert/3dgs/resolve/main/kitchen/kitchen.splat';
+        async function init() {
+            const errorLog = document.getElementById('error-log');
+            const loadStatus = document.getElementById('load-status');
 
-        viewer.addSplatScene(sceneUrl, { 'progressiveLoad': true })
-            .then(() => {
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('status').innerText = "Stato: Pronto! Clicca e gioca.";
+            try {
+                // 1. Controllo preliminare del file per evitare il RangeError
+                const check = await fetch(SPLAT_URL, { method: 'HEAD' });
+                if (!check.ok) throw new Error("Il file Splat non è raggiungibile (404).");
+
+                // 2. Caricamento effettivo
+                await viewer.addSplatScene(SPLAT_URL, {
+                    'progressiveLoad': true,
+                    'showLoadingUI': false
+                });
+
                 viewer.start();
+                document.getElementById('loading-screen').style.opacity = '0';
+                setTimeout(() => document.getElementById('loading-screen').style.display = 'none', 500);
+                document.getElementById('status').innerText = "Stato: ONLINE";
                 animate();
-            });
 
-        // Movimento
+            } catch (err) {
+                console.error(err);
+                loadStatus.innerText = "Errore critico.";
+                errorLog.innerText = "ERRORE: " + err.message;
+                errorLog.style.display = "block";
+            }
+        }
+
+        // --- SISTEMA DI MOVIMENTO ---
         const keys = {};
         window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
         window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
 
-        // Click per attivare
         document.body.addEventListener('click', () => {
-            document.body.requestPointerLock();
+            if (document.pointerLockElement !== document.body) {
+                document.body.requestPointerLock();
+            }
         });
 
         function animate() {
             requestAnimationFrame(animate);
             
-            // Logica di movimento WASD
             if (viewer.camera && document.pointerLockElement === document.body) {
-                const speed = 0.04;
+                const speed = 0.05;
                 const forward = new THREE.Vector3();
                 viewer.camera.getWorldDirection(forward);
+                forward.y = 0; // Impedisce di "volare" o affondare
+                forward.normalize();
                 
                 const right = new THREE.Vector3().crossVectors(forward, viewer.camera.up).normalize();
 
@@ -88,6 +117,8 @@
                 if (keys['d']) viewer.camera.position.addScaledVector(right, speed);
             }
         }
+
+        init();
     </script>
 </body>
 </html>
